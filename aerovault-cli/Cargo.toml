@@ -1,0 +1,21 @@
+[package]
+name = "aerovault-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "CLI for AeroVault v2 encrypted vaults"
+
+[[bin]]
+name = "aerovault"
+path = "src/main.rs"
+
+[dependencies]
+aerovault = { workspace = true }
+clap = { workspace = true }
+indicatif = { workspace = true }
+secrecy = { workspace = true }
+serde_json = { workspace = true }
+zeroize = { workspace = true }
+rpassword = "7"

@@ -1,0 +1,34 @@
+[workspace]
+members = ["aerovault", "aerovault-cli"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+authors = ["AXP Development <dev@axpdev.it>"]
+repository = "https://github.com/axpnet/aerovault"
+homepage = "https://github.com/axpnet/aerovault"
+documentation = "https://docs.rs/aerovault"
+description = "Military-grade encrypted vault format — AES-256-GCM-SIV, Argon2id, AES-KW, HMAC-SHA512"
+keywords = ["encryption", "vault", "aes-gcm-siv", "argon2", "cryptography"]
+categories = ["cryptography", "command-line-utilities"]
+
+[workspace.dependencies]
+aerovault = { path = "aerovault" }
+aes-gcm-siv = "0.11"
+aes-kw = { version = "0.2", features = ["std"] }
+aes-siv = "0.7"
+argon2 = "0.5"
+chacha20poly1305 = "0.10"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+hmac = "0.12"
+indicatif = "0.17"
+rand = "0.8"
+secrecy = { version = "0.8", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+hkdf = "0.12"
+zeroize = { version = "1", features = ["derive"] }
