@@ -79,7 +79,7 @@ pub mod vault;
 // Re-export primary API
 pub use error::Error;
 pub use format::{EncryptionMode, HeaderFlags, ManifestEntry, VaultHeader, VaultManifest};
-pub use vault::{CreateOptions, EntryInfo, Vault};
+pub use vault::{CompactResult, CreateOptions, EntryInfo, PeekInfo, Vault};
 
 /// Result type alias for AeroVault operations.
 pub type Result<T> = std::result::Result<T, Error>;

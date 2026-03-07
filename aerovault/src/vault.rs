@@ -235,6 +235,30 @@ impl Vault {
         &buf[..10] == MAGIC && buf[10] == VERSION
     }
 
+    /// Read vault header information without a password.
+    ///
+    /// Returns basic metadata (version, encryption mode, chunk size) that is
+    /// stored unencrypted in the header. Useful for UI display before unlock.
+    pub fn peek(path: impl AsRef<Path>) -> crate::Result<PeekInfo> {
+        let file = File::open(path.as_ref())?;
+        let mut reader = BufReader::new(file);
+        let mut header_buf = [0u8; HEADER_SIZE];
+        reader.read_exact(&mut header_buf)?;
+        let header = VaultHeader::from_bytes(&header_buf)?;
+
+        let mode = if header.flags.cascade_mode {
+            EncryptionMode::Cascade
+        } else {
+            EncryptionMode::Standard
+        };
+
+        Ok(PeekInfo {
+            version: header.version,
+            mode,
+            chunk_size: header.chunk_size,
+        })
+    }
+
     /// Get the vault file path.
     pub fn path(&self) -> &Path {
         &self.path
@@ -692,6 +716,210 @@ impl Vault {
         Ok(())
     }
 
+    /// Delete multiple entries from the vault manifest in a single pass.
+    ///
+    /// If `recursive` is true, deleting a directory also removes all entries
+    /// under it (e.g., deleting "docs" also removes "docs/file.txt").
+    /// Returns the number of entries removed.
+    pub fn delete_entries(&self, names: &[&str], recursive: bool) -> crate::Result<u32> {
+        let file = File::open(&self.path)?;
+        let mut reader = BufReader::new(file);
+
+        let mut header_buf = [0u8; HEADER_SIZE];
+        reader.read_exact(&mut header_buf)?;
+
+        let (_manifest_len, manifest_encrypted) = crypto::read_manifest_bounded(&mut reader)?;
+        let manifest_str = std::str::from_utf8(&manifest_encrypted)
+            .map_err(|_| CryptoError::ManifestEncoding)?;
+        let manifest_json = crypto::decrypt_filename(
+            self.master_key.expose_secret(),
+            manifest_str,
+        )?;
+
+        let mut manifest: VaultManifest = serde_json::from_str(&manifest_json)
+            .map_err(|e| crate::Error::Manifest(e.to_string()))?;
+
+        let mut data_section = Vec::new();
+        reader.read_to_end(&mut data_section)?;
+
+        let original_count = manifest.entries.len();
+
+        manifest.entries.retain(|entry| {
+            let decrypted = crypto::decrypt_filename(
+                self.master_key.expose_secret(),
+                &entry.encrypted_name,
+            );
+            match decrypted {
+                Ok(name) => {
+                    // Direct name match
+                    if names.contains(&name.as_str()) {
+                        return false;
+                    }
+                    // Recursive: remove children of deleted directories
+                    if recursive {
+                        for target in names {
+                            if name.starts_with(&format!("{target}/")) {
+                                return false;
+                            }
+                        }
+                    }
+                    true
+                }
+                Err(_) => true,
+            }
+        });
+
+        let removed = (original_count - manifest.entries.len()) as u32;
+        if removed > 0 {
+            manifest.modified = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+            self.write_vault_atomic(&header_buf, &manifest, &data_section, &[])?;
+        }
+
+        Ok(removed)
+    }
+
+    /// Compact the vault by removing orphaned data from deleted entries.
+    ///
+    /// Reads all surviving entries, decrypts and re-encrypts their chunks with
+    /// fresh nonces, and writes a new vault file. Uses atomic temp+rename.
+    ///
+    /// Returns a [`CompactResult`] with size savings information.
+    pub fn compact(&self) -> crate::Result<CompactResult> {
+        use std::io::Seek;
+
+        let original_size = std::fs::metadata(&self.path)?.len();
+
+        // Read header + manifest
+        let file = File::open(&self.path)?;
+        let mut reader = BufReader::new(file);
+
+        let mut header_buf = [0u8; HEADER_SIZE];
+        reader.read_exact(&mut header_buf)?;
+
+        let (manifest_len, manifest_encrypted) = crypto::read_manifest_bounded(&mut reader)?;
+        let manifest_str = std::str::from_utf8(&manifest_encrypted)
+            .map_err(|_| CryptoError::ManifestEncoding)?;
+        let manifest_json = crypto::decrypt_filename(
+            self.master_key.expose_secret(),
+            manifest_str,
+        )?;
+
+        let mut manifest: VaultManifest = serde_json::from_str(&manifest_json)
+            .map_err(|e| crate::Error::Manifest(e.to_string()))?;
+
+        let data_start = HEADER_SIZE as u64 + 4 + manifest_len as u64;
+        let cascade_mode = self.header.flags.cascade_mode;
+        let file_count = manifest.entries.len();
+        drop(reader);
+
+        let chacha_key = if cascade_mode {
+            crypto::derive_chacha_key(self.master_key.expose_secret())
+        } else {
+            zeroize::Zeroizing::new([0u8; KEY_SIZE])
+        };
+
+        // Re-open for seek-based reads
+        let orig_file = File::open(&self.path)?;
+        let mut orig_reader = BufReader::new(orig_file);
+
+        let mut compacted_data: Vec<u8> = Vec::new();
+        let mut new_data_offset: u64 = 0;
+
+        for entry in &mut manifest.entries {
+            if entry.is_dir || entry.chunk_count == 0 {
+                entry.offset = 0;
+                continue;
+            }
+
+            let entry_new_offset = new_data_offset;
+            orig_reader.seek(std::io::SeekFrom::Start(data_start + entry.offset))?;
+
+            for chunk_idx in 0..entry.chunk_count {
+                let mut len_buf = [0u8; 4];
+                orig_reader.read_exact(&mut len_buf)?;
+                let encrypted_chunk_len = u32::from_le_bytes(len_buf) as usize;
+
+                let mut encrypted_chunk = vec![0u8; encrypted_chunk_len];
+                orig_reader.read_exact(&mut encrypted_chunk)?;
+
+                let mut plaintext = if cascade_mode {
+                    crypto::decrypt_chunk_cascade(
+                        self.master_key.expose_secret(),
+                        &chacha_key,
+                        &encrypted_chunk,
+                        chunk_idx,
+                    )?
+                } else {
+                    crypto::decrypt_chunk(
+                        self.master_key.expose_secret(),
+                        &encrypted_chunk,
+                        chunk_idx,
+                    )?
+                };
+
+                encrypted_chunk.zeroize();
+
+                let new_encrypted = if cascade_mode {
+                    crypto::encrypt_chunk_cascade(
+                        self.master_key.expose_secret(),
+                        &chacha_key,
+                        &plaintext,
+                        chunk_idx,
+                    )?
+                } else {
+                    crypto::encrypt_chunk(
+                        self.master_key.expose_secret(),
+                        &plaintext,
+                        chunk_idx,
+                    )?
+                };
+
+                plaintext.zeroize();
+
+                let new_chunk_len = new_encrypted.len() as u32;
+                compacted_data.extend_from_slice(&new_chunk_len.to_le_bytes());
+                compacted_data.extend_from_slice(&new_encrypted);
+
+                new_data_offset += 4 + new_encrypted.len() as u64;
+            }
+
+            entry.offset = entry_new_offset;
+        }
+        drop(orig_reader);
+
+        manifest.modified = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+
+        // Write compacted vault
+        let manifest_json = serde_json::to_string(&manifest)
+            .map_err(|e| crate::Error::Manifest(e.to_string()))?;
+        let encrypted_manifest =
+            crypto::encrypt_filename(self.master_key.expose_secret(), &manifest_json)?;
+        let manifest_bytes = encrypted_manifest.as_bytes();
+
+        let tmp_path = format!("{}.compact.tmp", self.path.display());
+        let tmp_file = File::create(&tmp_path)?;
+        let mut writer = BufWriter::new(tmp_file);
+
+        writer.write_all(&header_buf)?;
+        writer.write_all(&(manifest_bytes.len() as u32).to_le_bytes())?;
+        writer.write_all(manifest_bytes)?;
+        writer.write_all(&compacted_data)?;
+        writer.flush()?;
+        writer.get_ref().sync_all()?;
+        drop(writer);
+
+        atomic_rename(&tmp_path, &self.path)?;
+
+        let compacted_size = std::fs::metadata(&self.path)?.len();
+
+        Ok(CompactResult {
+            original_size,
+            compacted_size,
+            saved_bytes: original_size.saturating_sub(compacted_size),
+            file_count,
+        })
+    }
+
     /// Change the vault password.
     ///
     /// Re-wraps the master and MAC keys with a new KEK. The encrypted content
@@ -810,6 +1038,30 @@ impl Vault {
         atomic_rename(&tmp_path, &self.path)?;
         Ok(())
     }
+}
+
+/// Header information available without a password.
+#[derive(Debug, Clone)]
+pub struct PeekInfo {
+    /// Format version.
+    pub version: u8,
+    /// Encryption mode.
+    pub mode: EncryptionMode,
+    /// Chunk size in bytes.
+    pub chunk_size: u32,
+}
+
+/// Result of a compact operation.
+#[derive(Debug, Clone)]
+pub struct CompactResult {
+    /// Original vault file size in bytes.
+    pub original_size: u64,
+    /// Compacted vault file size in bytes.
+    pub compacted_size: u64,
+    /// Bytes saved.
+    pub saved_bytes: u64,
+    /// Number of entries in the vault.
+    pub file_count: usize,
 }
 
 /// Security information about a vault.
