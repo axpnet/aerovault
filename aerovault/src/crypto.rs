@@ -131,41 +131,53 @@ pub(crate) fn derive_chacha_key(master_key: &[u8]) -> Zeroizing<[u8; KEY_SIZE]> 
     chacha_key
 }
 
-/// Encrypt a filename (or manifest JSON) using AES-256-SIV.
+/// Encrypt a filename (or manifest JSON) using AES-256-SIV-AEAD.
 ///
-/// Returns a hex-encoded ciphertext string. AES-SIV is deterministic:
+/// Returns a BASE64URL_NOPAD-encoded ciphertext string. AES-SIV is deterministic:
 /// the same plaintext always produces the same ciphertext, enabling
 /// efficient duplicate detection without decrypting all entries.
+///
+/// Uses `Aes256SivAead` with an empty nonce for deterministic encryption,
+/// matching the original AeroFTP implementation.
 pub(crate) fn encrypt_filename(master_key: &[u8], plaintext: &str) -> crate::Result<String> {
-    use aes_siv::siv::Aes256Siv;
+    use aes_siv::Aes256SivAead;
     use aes_siv::KeyInit as SivKeyInit;
 
-    let siv_key = derive_siv_key(master_key);
-    let mut cipher = Aes256Siv::new_from_slice(siv_key.as_ref())
+    let mut siv_key = derive_siv_key(master_key);
+    let cipher = Aes256SivAead::new_from_slice(siv_key.as_ref())
         .map_err(|e| CryptoError::SivOperation(e.to_string()))?;
 
+    let nonce = aes_siv::Nonce::default();
     let ciphertext = cipher
-        .encrypt([&[]], plaintext.as_bytes())
+        .encrypt(&nonce, plaintext.as_bytes())
         .map_err(|e| CryptoError::SivOperation(e.to_string()))?;
 
-    Ok(hex::encode(&ciphertext))
+    // Zeroize the derived key after use
+    siv_key.as_mut().zeroize();
+
+    Ok(data_encoding::BASE64URL_NOPAD.encode(&ciphertext))
 }
 
-/// Decrypt a filename (or manifest JSON) from hex-encoded AES-256-SIV ciphertext.
-pub(crate) fn decrypt_filename(master_key: &[u8], hex_ciphertext: &str) -> crate::Result<String> {
-    use aes_siv::siv::Aes256Siv;
+/// Decrypt a filename (or manifest JSON) from BASE64URL_NOPAD-encoded AES-256-SIV ciphertext.
+pub(crate) fn decrypt_filename(master_key: &[u8], encoded_ciphertext: &str) -> crate::Result<String> {
+    use aes_siv::Aes256SivAead;
     use aes_siv::KeyInit as SivKeyInit;
 
-    let siv_key = derive_siv_key(master_key);
-    let mut cipher = Aes256Siv::new_from_slice(siv_key.as_ref())
+    let ciphertext = data_encoding::BASE64URL_NOPAD
+        .decode(encoded_ciphertext.as_bytes())
         .map_err(|e| CryptoError::SivOperation(e.to_string()))?;
 
-    let ciphertext =
-        hex::decode(hex_ciphertext).map_err(|e| CryptoError::SivOperation(e.to_string()))?;
+    let mut siv_key = derive_siv_key(master_key);
+    let cipher = Aes256SivAead::new_from_slice(siv_key.as_ref())
+        .map_err(|e| CryptoError::SivOperation(e.to_string()))?;
 
+    let nonce = aes_siv::Nonce::default();
     let plaintext = cipher
-        .decrypt([&[]], &ciphertext)
+        .decrypt(&nonce, ciphertext.as_ref())
         .map_err(|e| CryptoError::SivOperation(e.to_string()))?;
+
+    // Zeroize the derived key after use
+    siv_key.as_mut().zeroize();
 
     String::from_utf8(plaintext).map_err(|e| CryptoError::SivOperation(e.to_string()).into())
 }
@@ -337,27 +349,6 @@ pub(crate) fn read_manifest_bounded(
     Ok((manifest_len, manifest))
 }
 
-// Private hex encode/decode to avoid an external dependency
-mod hex {
-    pub fn encode(data: &[u8]) -> String {
-        let mut s = String::with_capacity(data.len() * 2);
-        for byte in data {
-            s.push_str(&format!("{byte:02x}"));
-        }
-        s
-    }
-
-    pub fn decode(s: &str) -> Result<Vec<u8>, String> {
-        if !s.len().is_multiple_of(2) {
-            return Err("odd-length hex string".into());
-        }
-        (0..s.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|e| e.to_string()))
-            .collect()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -441,15 +432,6 @@ mod tests {
         let plaintext = b"data";
         let encrypted = encrypt_chunk_cascade(&master, &chacha, plaintext, 0).unwrap();
         assert!(decrypt_chunk_cascade(&master, &chacha, &encrypted, 1).is_err());
-    }
-
-    #[test]
-    fn test_hex_roundtrip() {
-        let data = vec![0x00, 0xff, 0xab, 0x12];
-        let encoded = hex::encode(&data);
-        assert_eq!(encoded, "00ffab12");
-        let decoded = hex::decode(&encoded).unwrap();
-        assert_eq!(decoded, data);
     }
 
     #[test]

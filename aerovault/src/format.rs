@@ -56,8 +56,8 @@ impl HeaderFlags {
 /// | 44 | 40 | AES-KW wrapped master key |
 /// | 84 | 40 | AES-KW wrapped MAC key |
 /// | 124 | 4 | Chunk size (LE u32) |
-/// | 128 | 64 | HMAC-SHA512 over bytes 0..128 |
-/// | 192 | 320 | Reserved (zero-filled) |
+/// | 128 | 320 | Reserved (zero-filled) |
+/// | 448 | 64 | HMAC-SHA512 over all 512 bytes (MAC field zeroed) |
 #[derive(Debug, Clone)]
 pub struct VaultHeader {
     /// Magic bytes: `AEROVAULT2`.
@@ -80,6 +80,8 @@ pub struct VaultHeader {
 
 impl VaultHeader {
     /// Serialize the header to a 512-byte array.
+    ///
+    /// MAC is stored at bytes 448..512 (end of header), matching AeroFTP format.
     pub fn to_bytes(&self) -> [u8; HEADER_SIZE] {
         let mut buf = [0u8; HEADER_SIZE];
 
@@ -90,8 +92,8 @@ impl VaultHeader {
         buf[44..84].copy_from_slice(&self.wrapped_master_key);
         buf[84..124].copy_from_slice(&self.wrapped_mac_key);
         buf[124..128].copy_from_slice(&self.chunk_size.to_le_bytes());
-        buf[128..192].copy_from_slice(&self.header_mac);
-        // bytes 192..512 remain zero (reserved)
+        // bytes 128..448 remain zero (reserved)
+        buf[HEADER_SIZE - MAC_SIZE..].copy_from_slice(&self.header_mac);
 
         buf
     }
@@ -99,6 +101,7 @@ impl VaultHeader {
     /// Deserialize a header from a 512-byte slice.
     ///
     /// Validates magic bytes and version number.
+    /// MAC is read from bytes 448..512 (end of header).
     pub fn from_bytes(data: &[u8]) -> crate::Result<Self> {
         if data.len() < HEADER_SIZE {
             return Err(FormatError::TooSmall {
@@ -133,7 +136,7 @@ impl VaultHeader {
         let chunk_size = u32::from_le_bytes([data[124], data[125], data[126], data[127]]);
 
         let mut header_mac = [0u8; MAC_SIZE];
-        header_mac.copy_from_slice(&data[128..192]);
+        header_mac.copy_from_slice(&data[HEADER_SIZE - MAC_SIZE..]);
 
         Ok(Self {
             magic,
@@ -147,15 +150,21 @@ impl VaultHeader {
         })
     }
 
-    /// Compute HMAC-SHA512 over the first 128 bytes of the header.
+    /// Compute HMAC-SHA512 over the entire 512-byte header with MAC field zeroed.
+    ///
+    /// This matches the original AeroFTP format: HMAC is computed over all 512
+    /// bytes with bytes 448..512 (the MAC field itself) set to zero.
     pub fn compute_mac(&self, mac_key: &[u8]) -> [u8; MAC_SIZE] {
         use hmac::{Hmac, Mac};
         use sha2::Sha512;
 
-        let header_bytes = self.to_bytes();
+        let mut header_bytes = self.to_bytes();
+        // Zero out the MAC field before computing
+        header_bytes[HEADER_SIZE - MAC_SIZE..].fill(0);
+
         let mut hmac = Hmac::<Sha512>::new_from_slice(mac_key)
             .expect("HMAC key length is always valid for SHA-512");
-        hmac.update(&header_bytes[..128]);
+        hmac.update(&header_bytes);
         let result = hmac.finalize();
 
         let mut mac = [0u8; MAC_SIZE];
@@ -168,10 +177,13 @@ impl VaultHeader {
         use hmac::{Hmac, Mac};
         use sha2::Sha512;
 
-        let header_bytes = self.to_bytes();
+        let mut header_bytes = self.to_bytes();
+        // Zero out the MAC field before computing
+        header_bytes[HEADER_SIZE - MAC_SIZE..].fill(0);
+
         let mut hmac = Hmac::<Sha512>::new_from_slice(mac_key)
             .expect("HMAC key length is always valid for SHA-512");
-        hmac.update(&header_bytes[..128]);
+        hmac.update(&header_bytes);
 
         // Constant-time comparison via the hmac crate
         hmac.verify_slice(&self.header_mac)
@@ -214,6 +226,9 @@ pub struct VaultManifest {
     pub created: String,
     /// Last modification timestamp (ISO 8601).
     pub modified: String,
+    /// Optional description (backward compatibility with AeroFTP vaults).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// List of encrypted entries.
     pub entries: Vec<ManifestEntry>,
 }

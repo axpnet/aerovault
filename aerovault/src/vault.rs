@@ -142,6 +142,7 @@ impl Vault {
         let manifest = VaultManifest {
             created: now.clone(),
             modified: now,
+            description: None,
             entries: Vec::new(),
         };
 

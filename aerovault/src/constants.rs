@@ -54,13 +54,13 @@ pub const ARGON2_P_COST: u32 = 4;
 // --- HKDF Domain Separation Labels ---
 
 /// HKDF info label for the master KEK derivation.
-pub const HKDF_LABEL_MASTER: &[u8] = b"aerovault-kek-master";
+pub const HKDF_LABEL_MASTER: &[u8] = b"AeroVault v2 KEK for master key";
 
 /// HKDF info label for the MAC KEK derivation.
-pub const HKDF_LABEL_MAC: &[u8] = b"aerovault-kek-mac";
+pub const HKDF_LABEL_MAC: &[u8] = b"AeroVault v2 KEK for MAC key";
 
 /// HKDF info label for the ChaCha20-Poly1305 cascade key.
-pub const HKDF_LABEL_CHACHA: &[u8] = b"aerovault-chacha";
+pub const HKDF_LABEL_CHACHA: &[u8] = b"AeroVault v2 ChaCha20-Poly1305 cascade";
 
 /// HKDF info label for the AES-SIV filename encryption key.
-pub const HKDF_LABEL_SIV: &[u8] = b"aerovault-siv";
+pub const HKDF_LABEL_SIV: &[u8] = b"AeroVault v2 AES-SIV filename encryption";
