@@ -1,5 +1,9 @@
 # AeroVault
 
+[![Crates.io](https://img.shields.io/crates/v/aerovault)](https://crates.io/crates/aerovault)
+[![docs.rs](https://docs.rs/aerovault/badge.svg)](https://docs.rs/aerovault)
+[![License: GPL-3.0](https://img.shields.io/crates/l/aerovault)](LICENSE)
+
 Military-grade encrypted vault format for single-file encrypted containers.
 
 AeroVault v2 combines **AES-256-GCM-SIV** (nonce misuse-resistant), **Argon2id** (128 MiB), **AES-256-KW** key wrapping, and optional **ChaCha20-Poly1305** cascade encryption into a portable `.aerovault` file format.
@@ -24,10 +28,10 @@ AeroVault v2 combines **AES-256-GCM-SIV** (nonce misuse-resistant), **Argon2id**
 cargo install --path aerovault-cli
 ```
 
-### From crates.io (coming soon)
+### From crates.io
 
 ```bash
-cargo install aerovault-cli
+cargo add aerovault
 ```
 
 ## CLI Usage
