@@ -1,5 +1,9 @@
 # AeroVault
 
+<p align="center">
+  <img src="docs/img/aerovault-icon-128.png" alt="AeroVault" width="96" />
+</p>
+
 [![Crates.io](https://img.shields.io/crates/v/aerovault)](https://crates.io/crates/aerovault)
 [![docs.rs](https://docs.rs/aerovault/badge.svg)](https://docs.rs/aerovault)
 [![License: GPL-3.0](https://img.shields.io/crates/l/aerovault)](LICENSE)

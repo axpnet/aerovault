@@ -83,3 +83,14 @@ pub use vault::{CompactResult, CreateOptions, EntryInfo, PeekInfo, Vault};
 
 /// Result type alias for AeroVault operations.
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// MIME type for `.aerovault` files.
+///
+/// Register this in your OS integration (freedesktop shared-mime-info, Windows Registry, etc.).
+pub const MIME_TYPE: &str = "application/x-aerovault";
+
+/// SVG icon for the `.aerovault` MIME type (shield with lock, emerald color scheme).
+///
+/// Embedders can use this to register the file type icon without shipping separate assets.
+/// The icon follows the freedesktop naming convention `application-x-aerovault`.
+pub const ICON_SVG: &str = include_str!("../../docs/img/aerovault-icon.svg");
