@@ -93,4 +93,4 @@ pub const MIME_TYPE: &str = "application/x-aerovault";
 ///
 /// Embedders can use this to register the file type icon without shipping separate assets.
 /// The icon follows the freedesktop naming convention `application-x-aerovault`.
-pub const ICON_SVG: &str = include_str!("../../docs/img/aerovault-icon.svg");
+pub const ICON_SVG: &str = include_str!("aerovault-icon.svg");
